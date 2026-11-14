@@ -1,12 +1,12 @@
 """
 Service đọc, chuẩn hóa, lưu bộ nhớ đệm (cache), xử lý dữ liệu và hỗ trợ Thêm / Sửa / Xóa nhân viên
+Tương thích hoàn toàn với môi trường Serverless (Vercel / AWS Lambda / Render / Local)
 """
 
 import os
 import re
 import io
 import json
-import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 import requests
@@ -21,12 +21,20 @@ EXPECTED_COLUMNS: List[str] = [
     "Inside Account", "Password", "CMND", "Địa chỉ", "Email",
     "Số điện thoại", "Tình trạng Tài khoản", "Tình trạng Hợp đồng",
     "Chức danh", "Điều hành", "Loại HĐLĐ", "Phân công", "Tính lương",
-    "Tọa độ", "V vị trí phụ trách" if False else "Vị trí phụ trách", "Hình ảnh", "Hỗ trợ",
+    "Tọa độ", "Vị trí phụ trách", "Hình ảnh", "Hỗ trợ",
     "Mã NV Đội trưởng", "Họ tên Đội trưởng", "Số điện thoại FRT",
     "Ngày Vô Công Ty", "Ngày làm Việc Cuối", "Mobisale", "Roles"
 ]
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+# Xử lý đường dẫn an toàn cho môi trường Serverless (Vercel hệ thống tệp chỉ đọc ngoại trừ /tmp)
+IS_SERVERLESS = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+if IS_SERVERLESS:
+    DATA_DIR = "/tmp/data"
+else:
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+
 MUTATIONS_FILE = os.path.join(DATA_DIR, "local_mutations.json")
 
 class SheetsService:
@@ -45,8 +53,12 @@ class SheetsService:
         self._data_source: str = "Chưa nạp"
         self._is_sample: bool = False
 
-        # Khởi tạo file lưu trữ thay đổi cục bộ (Thêm / Sửa / Xóa)
-        os.makedirs(DATA_DIR, exist_ok=True)
+        # Khởi tạo thư mục và nạp mutations an toàn
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+        except Exception as e:
+            print(f"[Cảnh báo] Không thể tạo thư mục DATA_DIR {DATA_DIR}: {e}")
+
         self._mutations = self._load_mutations()
 
     @property
@@ -64,12 +76,13 @@ class SheetsService:
         return {"deleted_ids": [], "updated_records": {}, "added_records": []}
 
     def _save_mutations(self):
-        """Lưu các thay đổi cục bộ vào file JSON để bảo toàn khi khởi động lại."""
+        """Lưu các thay đổi cục bộ vào file JSON (có try/catch tránh crash trên môi trường read-only)."""
         try:
+            os.makedirs(os.path.dirname(MUTATIONS_FILE), exist_ok=True)
             with open(MUTATIONS_FILE, "w", encoding="utf-8") as f:
                 json.dump(self._mutations, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[Lỗi] Không thể ghi file mutations: {e}")
+            print(f"[Cảnh báo] Không thể ghi file mutations (chế độ chỉ đọc): {e}")
 
     def normalize_column_name(self, col: str) -> str:
         """Chuẩn hóa tên cột: xóa ký tự xuống dòng, khoảng trắng thừa."""
@@ -101,13 +114,14 @@ class SheetsService:
         return df
 
     def _fetch_from_google_sheet(self) -> Tuple[pd.DataFrame, bool, Optional[str]]:
-        """Gọi trực tiếp tới Google Sheets export CSV."""
+        """Gọi trực tiếp tới Google Sheets export CSV (timeout tối ưu cho Serverless)."""
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/csv,application/csv,text/plain;q=0.9,*/*;q=0.8"
         }
         try:
-            resp = requests.get(self.csv_url, headers=headers, timeout=15, allow_redirects=True)
+            # Dùng timeout=8s để vừa vặn trong giới hạn 10s Serverless của Vercel
+            resp = requests.get(self.csv_url, headers=headers, timeout=8, allow_redirects=True)
             content_type = resp.headers.get("Content-Type", "")
             first_bytes = resp.content[:500].decode("utf-8", errors="ignore").lower()
             
@@ -137,14 +151,17 @@ class SheetsService:
 
     def _load_fallback_sample(self) -> Tuple[pd.DataFrame, str]:
         """Tải dữ liệu mẫu dự phòng khi chưa kết nối được Google Sheet."""
-        sample_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_data", "employees_sample.csv")
+        sample_path = os.path.join(BASE_DIR, "sample_data", "employees_sample.csv")
         if os.path.exists(sample_path):
-            df = pd.read_csv(sample_path, dtype=str, keep_default_na=False, skipinitialspace=True)
-            return self.clean_dataframe(df), "Dữ liệu mẫu dự phòng (Sample fallback)"
+            try:
+                df = pd.read_csv(sample_path, dtype=str, keep_default_na=False, skipinitialspace=True)
+                return self.clean_dataframe(df), "Dữ liệu mẫu dự phòng (Sample fallback)"
+            except Exception as e:
+                print(f"[Cảnh báo] Lỗi đọc file mẫu: {e}")
         return pd.DataFrame(columns=EXPECTED_COLUMNS), "Trống"
 
     def _get_record_id(self, r: Dict[str, Any], fallback_idx: int = 0) -> str:
-        """Lấy định danh duy nhất của một nhân viên (ưu tiên Mã NV, Inside Account, hoặc STT)."""
+        """Lấy định danh duy nhất của một nhân viên."""
         ma_nv = str(r.get("Mã NV", "")).strip()
         if ma_nv:
             return ma_nv
@@ -157,30 +174,21 @@ class SheetsService:
         return f"id_gen_{fallback_idx}"
 
     def _merge_mutations(self, base_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Hợp nhất dữ liệu gốc từ Google Sheets với các thao tác Thêm / Sửa / Xóa cục bộ:
-        1. Bỏ qua các nhân viên nằm trong deleted_ids
-        2. Cập nhật các nhân viên nằm trong updated_records
-        3. Ghép nối thêm các nhân viên mới trong added_records
-        4. Đánh lại số thứ tự STT
-        """
+        """Hợp nhất dữ liệu gốc với các thao tác Thêm / Sửa / Xóa."""
         deleted_ids = set(self._mutations.get("deleted_ids", []))
         updated_records = self._mutations.get("updated_records", {})
         added_records = self._mutations.get("added_records", [])
 
         merged: List[Dict[str, Any]] = []
 
-        # Xử lý danh sách gốc
         for idx, item in enumerate(base_records):
             rec = dict(item)
             rec_id = self._get_record_id(rec, idx)
             rec["_id"] = rec_id
 
-            # Nếu đã xóa -> bỏ qua
             if rec_id in deleted_ids:
                 continue
 
-            # Nếu có chỉnh sửa -> cập nhật giá trị mới
             if rec_id in updated_records:
                 update_val = updated_records[rec_id]
                 for k, v in update_val.items():
@@ -189,7 +197,6 @@ class SheetsService:
 
             merged.append(rec)
 
-        # Xử lý các nhân viên được thêm mới
         for add_idx, item in enumerate(added_records):
             rec = dict(item)
             rec_id = self._get_record_id(rec, 9000 + add_idx)
@@ -206,14 +213,13 @@ class SheetsService:
 
             merged.append(rec)
 
-        # Đánh lại STT chuẩn từ 1 đến N
         for i, r in enumerate(merged, start=1):
             r["STT"] = str(i)
 
         return merged
 
     def get_data(self, force_refresh: bool = False) -> Dict[str, Any]:
-        """Lấy danh sách nhân viên đã chuẩn hóa kèm metadata, thống kê và các thay đổi Thêm/Sửa/Xóa."""
+        """Lấy danh sách nhân viên đã chuẩn hóa kèm metadata và thống kê."""
         now = datetime.now()
         is_cache_valid = (
             not force_refresh 
@@ -243,7 +249,6 @@ class SheetsService:
                 else:
                     self._last_error = error_msg
 
-        # Luôn hợp nhất các thao tác Thêm / Sửa / Xóa vào base data
         merged_data = self._merge_mutations(self._base_data or [])
         self._cached_data = merged_data
 
@@ -269,29 +274,21 @@ class SheetsService:
             }
         }
 
-    # ==========================
-    # CÁC THAO TÁC THÊM / SỬA / XÓA (CRUD)
-    # ==========================
-
     def add_employee(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Thêm mới một nhân viên vào hệ thống."""
-        # Chuẩn hóa dữ liệu theo 30 cột
         new_emp: Dict[str, str] = {col: str(data.get(col, "")).strip() for col in EXPECTED_COLUMNS}
         
-        # Nếu chưa có Mã NV, tự động tạo mã NV
         if not new_emp["Mã NV"]:
             new_emp["Mã NV"] = f"NV{datetime.now().strftime('%y%m%d%H%M%S')}"
 
         rec_id = new_emp["Mã NV"]
         new_emp["_id"] = rec_id
 
-        # Lưu vào danh sách added_records
         added_list = self._mutations.get("added_records", [])
         added_list.append(new_emp)
         self._mutations["added_records"] = added_list
         self._save_mutations()
 
-        # Làm mới cache hiển thị
         if self._base_data is not None:
             self._cached_data = self._merge_mutations(self._base_data)
 
@@ -303,7 +300,6 @@ class SheetsService:
         if not emp_id:
             return None
 
-        # Kiểm tra xem có trong added_records không
         added_records = self._mutations.get("added_records", [])
         found_in_added = False
         for idx, item in enumerate(added_records):
@@ -319,7 +315,6 @@ class SheetsService:
         if found_in_added:
             self._mutations["added_records"] = added_records
         else:
-            # Lưu vào updated_records
             updated = self._mutations.get("updated_records", {})
             current_vals = updated.get(emp_id, {})
             for col in EXPECTED_COLUMNS:
@@ -333,7 +328,6 @@ class SheetsService:
         if self._base_data is not None:
             self._cached_data = self._merge_mutations(self._base_data)
 
-        # Trả về bản ghi mới nhất
         for r in (self._cached_data or []):
             if str(r.get("_id")) == emp_id or str(r.get("Mã NV")) == emp_id:
                 return r
@@ -346,18 +340,14 @@ class SheetsService:
         if not emp_id:
             return False
 
-        # Nếu nằm trong added_records -> xóa trực tiếp khỏi added_records
         added_records = self._mutations.get("added_records", [])
         new_added = [r for r in added_records if str(r.get("_id") or r.get("Mã NV")) != emp_id]
-        was_added = len(new_added) < len(added_records)
         self._mutations["added_records"] = new_added
 
-        # Thêm vào deleted_ids nếu là bản ghi từ sheet gốc
         deleted_ids = set(self._mutations.get("deleted_ids", []))
         deleted_ids.add(emp_id)
         self._mutations["deleted_ids"] = list(deleted_ids)
 
-        # Xóa khỏi updated_records nếu có
         updated_records = self._mutations.get("updated_records", {})
         if emp_id in updated_records:
             del updated_records[emp_id]
@@ -371,7 +361,7 @@ class SheetsService:
         return True
 
     def reset_mutations(self) -> bool:
-        """Khôi phục lại dữ liệu gốc ban đầu từ Google Sheets (xóa toàn bộ thêm/sửa/xóa cục bộ)."""
+        """Khôi phục lại dữ liệu gốc ban đầu từ Google Sheets."""
         self._mutations = {"deleted_ids": [], "updated_records": {}, "added_records": []}
         self._save_mutations()
         if self._base_data is not None:

@@ -2,6 +2,7 @@
 Main application file - FastAPI Web Dashboard Quản lý Nhân sự
 Đọc dữ liệu trực tiếp từ Google Sheets và render theo phong cách shadcn/ui
 Hỗ trợ đầy đủ các thao tác Thêm / Sửa / Xóa nhân viên
+Hoàn toàn tương thích Vercel Serverless Function & Local Development
 """
 
 import os
@@ -24,17 +25,23 @@ DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
 SESSION_SECRET = os.getenv("SESSION_SECRET", "secret-token-key-2026-dashboard")
 COOKIE_NAME = "dashboard_auth"
 
+# Thiết lập đường dẫn tuyệt đối cho static và templates
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+
 app = FastAPI(
     title="Employee Dashboard - Google Sheets Live",
     description="Dashboard quản lý nhân sự trực tiếp từ Google Sheets với phong cách shadcn/ui",
-    version="1.1.0"
+    version="1.2.0"
 )
 
-# Gắn thư mục tĩnh (CSS, JS)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Gắn thư mục tĩnh (CSS, JS) an toàn
+if os.path.exists(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Khởi tạo Jinja2 Templates
-templates = Jinja2Templates(directory="templates")
+# Khởi tạo Jinja2 Templates an toàn
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 def is_auth_enabled() -> bool:
     """Kiểm tra có cấu hình mật khẩu truy cập dashboard không."""
@@ -122,10 +129,6 @@ def api_refresh_data(request: Request):
     
     result = sheets_service.get_data(force_refresh=True)
     return JSONResponse(content=result)
-
-# ==========================================
-# CÁC API THAO TÁC CRUD: THÊM / SỬA / XÓA
-# ==========================================
 
 # API Thêm nhân viên mới
 @app.post("/api/employees")
