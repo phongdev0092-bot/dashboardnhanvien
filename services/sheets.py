@@ -1,17 +1,24 @@
 """
 Service đọc, chuẩn hóa, lưu bộ nhớ đệm (cache), xử lý dữ liệu và hỗ trợ Thêm / Sửa / Xóa nhân viên
-Tương thích hoàn toàn với môi trường Serverless (Vercel / AWS Lambda / Render / Local)
+Hỗ trợ cả pandas và thư viện csv tiêu chuẩn để tối ưu tuyệt đối cho Serverless (Vercel / Lambda)
 """
 
 import os
 import re
 import io
+import csv
 import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 import requests
-import pandas as pd
 from dotenv import load_dotenv
+
+# Hỗ trợ pandas an toàn (nếu môi trường serverless gặp lỗi nhị phân, tự động dùng csv tiêu chuẩn)
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except Exception:
+    HAS_PANDAS = False
 
 load_dotenv()
 
@@ -26,7 +33,6 @@ EXPECTED_COLUMNS: List[str] = [
     "Ngày Vô Công Ty", "Ngày làm Việc Cuối", "Mobisale", "Roles"
 ]
 
-# Xử lý đường dẫn an toàn cho môi trường Serverless (Vercel hệ thống tệp chỉ đọc ngoại trừ /tmp)
 IS_SERVERLESS = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -44,20 +50,17 @@ class SheetsService:
         self.cache_ttl = int(os.getenv("CACHE_TTL_SECONDS", "300"))
         self.show_sensitive = os.getenv("SHOW_SENSITIVE", "false").lower() in ("true", "1", "yes")
 
-        # Cấu trúc cache
         self._base_data: Optional[List[Dict[str, Any]]] = None
         self._cached_data: Optional[List[Dict[str, Any]]] = None
-        self._cached_raw_df: Optional[pd.DataFrame] = None
         self._last_updated: Optional[datetime] = None
         self._last_error: Optional[str] = None
         self._data_source: str = "Chưa nạp"
         self._is_sample: bool = False
 
-        # Khởi tạo thư mục và nạp mutations an toàn
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
-        except Exception as e:
-            print(f"[Cảnh báo] Không thể tạo thư mục DATA_DIR {DATA_DIR}: {e}")
+        except Exception:
+            pass
 
         self._mutations = self._load_mutations()
 
@@ -66,61 +69,75 @@ class SheetsService:
         return f"https://docs.google.com/spreadsheets/d/{self.sheet_id}/export?format=csv&gid={self.sheet_gid}"
 
     def _load_mutations(self) -> Dict[str, Any]:
-        """Tải các thay đổi cục bộ đã lưu: deleted_ids, updated_records, added_records."""
         if os.path.exists(MUTATIONS_FILE):
             try:
                 with open(MUTATIONS_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception as e:
-                print(f"[Cảnh báo] Không thể đọc file mutations: {e}")
+            except Exception:
+                pass
         return {"deleted_ids": [], "updated_records": {}, "added_records": []}
 
     def _save_mutations(self):
-        """Lưu các thay đổi cục bộ vào file JSON (có try/catch tránh crash trên môi trường read-only)."""
         try:
             os.makedirs(os.path.dirname(MUTATIONS_FILE), exist_ok=True)
             with open(MUTATIONS_FILE, "w", encoding="utf-8") as f:
                 json.dump(self._mutations, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[Cảnh báo] Không thể ghi file mutations (chế độ chỉ đọc): {e}")
+        except Exception:
+            pass
 
     def normalize_column_name(self, col: str) -> str:
-        """Chuẩn hóa tên cột: xóa ký tự xuống dòng, khoảng trắng thừa."""
         cleaned = re.sub(r'[\r\n\t]+', ' ', str(col))
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        
         for expected in EXPECTED_COLUMNS:
             if cleaned.lower() == expected.lower():
                 return expected
         return cleaned
 
-    def clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Chuẩn hóa DataFrame: ép kiểu str, trim khoảng trắng, đảm bảo 30 cột."""
-        df.columns = [self.normalize_column_name(c) for c in df.columns]
-        df = df.dropna(how="all")
-        df = df.fillna("").astype(str)
-        df = df.map(lambda x: x.strip() if isinstance(x, str) else str(x).strip())
+    def parse_csv_text_to_records(self, csv_text: str) -> List[Dict[str, str]]:
+        """Chuyển đổi text CSV thành danh sách dict chuẩn 30 cột với dtype=str."""
+        if HAS_PANDAS:
+            try:
+                df = pd.read_csv(io.StringIO(csv_text), dtype=str, keep_default_na=False, skipinitialspace=True)
+                df.columns = [self.normalize_column_name(c) for c in df.columns]
+                df = df.dropna(how="all")
+                df = df.fillna("").astype(str)
+                df = df.map(lambda x: x.strip() if isinstance(x, str) else str(x).strip())
+                for col in EXPECTED_COLUMNS:
+                    if col not in df.columns:
+                        df[col] = ""
+                df = df[EXPECTED_COLUMNS]
+                records = df.to_dict(orient="records")
+                return [r for r in records if any(r.get(k) for k in ["Họ Tên NV", "Mã NV", "STT", "Email"])]
+            except Exception:
+                pass
 
-        key_cols = [c for c in ["Họ Tên NV", "Mã NV", "STT", "Email"] if c in df.columns]
-        if key_cols:
-            is_empty_row = df[key_cols].apply(lambda row: all(val == "" for val in row), axis=1)
-            df = df[~is_empty_row]
+        # Bộ đọc CSV tiêu chuẩn (dự phòng độc lập không phụ thuộc pandas)
+        f = io.StringIO(csv_text.strip())
+        reader = csv.reader(f)
+        try:
+            raw_headers = next(reader)
+        except StopIteration:
+            return []
 
-        for col in EXPECTED_COLUMNS:
-            if col not in df.columns:
-                df[col] = ""
+        headers = [self.normalize_column_name(h) for h in raw_headers]
+        records = []
+        for row in reader:
+            if not row or all(not str(c).strip() for c in row):
+                continue
+            rec = {col: "" for col in EXPECTED_COLUMNS}
+            for idx, col in enumerate(headers):
+                if col in rec and idx < len(row):
+                    rec[col] = str(row[idx]).strip()
+            if any(rec.get(k) for k in ["Họ Tên NV", "Mã NV", "STT", "Email"]):
+                records.append(rec)
+        return records
 
-        df = df[EXPECTED_COLUMNS]
-        return df
-
-    def _fetch_from_google_sheet(self) -> Tuple[pd.DataFrame, bool, Optional[str]]:
-        """Gọi trực tiếp tới Google Sheets export CSV (timeout tối ưu cho Serverless)."""
+    def _fetch_from_google_sheet(self) -> Tuple[List[Dict[str, str]], bool, Optional[str]]:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/csv,application/csv,text/plain;q=0.9,*/*;q=0.8"
         }
         try:
-            # Dùng timeout=8s để vừa vặn trong giới hạn 10s Serverless của Vercel
             resp = requests.get(self.csv_url, headers=headers, timeout=8, allow_redirects=True)
             content_type = resp.headers.get("Content-Type", "")
             first_bytes = resp.content[:500].decode("utf-8", errors="ignore").lower()
@@ -131,37 +148,41 @@ class SheetsService:
                     "Vui lòng mở Google Sheet -> Bấm nút 'Chia sẻ' (Share) góc trên bên phải -> "
                     "Đổi chế độ thành 'Bất kỳ ai có đường liên kết đều có thể xem' (Anyone with the link can view)."
                 )
-                return pd.DataFrame(), False, err_msg
+                return [], False, err_msg
             
             if resp.status_code != 200:
                 err_msg = f"Không thể tải dữ liệu từ Google Sheets (Mã lỗi HTTP {resp.status_code})."
-                return pd.DataFrame(), False, err_msg
+                return [], False, err_msg
 
             csv_text = resp.content.decode("utf-8-sig", errors="replace")
-            df = pd.read_csv(io.StringIO(csv_text), dtype=str, keep_default_na=False, skipinitialspace=True)
-            cleaned_df = self.clean_dataframe(df)
-            return cleaned_df, True, None
+            records = self.parse_csv_text_to_records(csv_text)
+            return records, True, None
 
         except requests.exceptions.RequestException as e:
             err_msg = f"Lỗi kết nối mạng khi tải Google Sheet: {str(e)}"
-            return pd.DataFrame(), False, err_msg
+            return [], False, err_msg
         except Exception as e:
             err_msg = f"Lỗi xử lý file CSV từ Google Sheet: {str(e)}"
-            return pd.DataFrame(), False, err_msg
+            return [], False, err_msg
 
-    def _load_fallback_sample(self) -> Tuple[pd.DataFrame, str]:
-        """Tải dữ liệu mẫu dự phòng khi chưa kết nối được Google Sheet."""
-        sample_path = os.path.join(BASE_DIR, "sample_data", "employees_sample.csv")
-        if os.path.exists(sample_path):
-            try:
-                df = pd.read_csv(sample_path, dtype=str, keep_default_na=False, skipinitialspace=True)
-                return self.clean_dataframe(df), "Dữ liệu mẫu dự phòng (Sample fallback)"
-            except Exception as e:
-                print(f"[Cảnh báo] Lỗi đọc file mẫu: {e}")
-        return pd.DataFrame(columns=EXPECTED_COLUMNS), "Trống"
+    def _load_fallback_sample(self) -> Tuple[List[Dict[str, str]], str]:
+        candidates = [
+            os.path.join(BASE_DIR, "sample_data", "employees_sample.csv"),
+            os.path.join(os.getcwd(), "sample_data", "employees_sample.csv"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_data", "employees_sample.csv"),
+            "/var/task/sample_data/employees_sample.csv"
+        ]
+        for p in candidates:
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8-sig") as f:
+                        records = self.parse_csv_text_to_records(f.read())
+                    return records, "Dữ liệu mẫu dự phòng (Sample fallback)"
+                except Exception:
+                    pass
+        return [], "Trống"
 
     def _get_record_id(self, r: Dict[str, Any], fallback_idx: int = 0) -> str:
-        """Lấy định danh duy nhất của một nhân viên."""
         ma_nv = str(r.get("Mã NV", "")).strip()
         if ma_nv:
             return ma_nv
@@ -174,7 +195,6 @@ class SheetsService:
         return f"id_gen_{fallback_idx}"
 
     def _merge_mutations(self, base_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Hợp nhất dữ liệu gốc với các thao tác Thêm / Sửa / Xóa."""
         deleted_ids = set(self._mutations.get("deleted_ids", []))
         updated_records = self._mutations.get("updated_records", {})
         added_records = self._mutations.get("added_records", [])
@@ -219,7 +239,6 @@ class SheetsService:
         return merged
 
     def get_data(self, force_refresh: bool = False) -> Dict[str, Any]:
-        """Lấy danh sách nhân viên đã chuẩn hóa kèm metadata và thống kê."""
         now = datetime.now()
         is_cache_valid = (
             not force_refresh 
@@ -229,19 +248,17 @@ class SheetsService:
         )
 
         if not is_cache_valid:
-            df, success, error_msg = self._fetch_from_google_sheet()
-            if success and not df.empty:
-                self._cached_raw_df = df
-                self._base_data = df.to_dict(orient="records")
+            records, success, error_msg = self._fetch_from_google_sheet()
+            if success and records:
+                self._base_data = records
                 self._last_updated = now
                 self._last_error = None
                 self._data_source = "Google Sheets Trực tiếp"
                 self._is_sample = False
             else:
                 if self._base_data is None:
-                    sample_df, source_desc = self._load_fallback_sample()
-                    self._cached_raw_df = sample_df
-                    self._base_data = sample_df.to_dict(orient="records")
+                    sample_records, source_desc = self._load_fallback_sample()
+                    self._base_data = sample_records
                     self._last_updated = now
                     self._last_error = error_msg
                     self._data_source = source_desc
@@ -275,9 +292,7 @@ class SheetsService:
         }
 
     def add_employee(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Thêm mới một nhân viên vào hệ thống."""
         new_emp: Dict[str, str] = {col: str(data.get(col, "")).strip() for col in EXPECTED_COLUMNS}
-        
         if not new_emp["Mã NV"]:
             new_emp["Mã NV"] = f"NV{datetime.now().strftime('%y%m%d%H%M%S')}"
 
@@ -295,7 +310,6 @@ class SheetsService:
         return new_emp
 
     def update_employee(self, emp_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Chỉnh sửa thông tin nhân viên theo _id hoặc Mã NV."""
         emp_id = str(emp_id).strip()
         if not emp_id:
             return None
@@ -335,7 +349,6 @@ class SheetsService:
         return data
 
     def delete_employee(self, emp_id: str) -> bool:
-        """Xóa một nhân viên theo _id hoặc Mã NV."""
         emp_id = str(emp_id).strip()
         if not emp_id:
             return False
@@ -361,7 +374,6 @@ class SheetsService:
         return True
 
     def reset_mutations(self) -> bool:
-        """Khôi phục lại dữ liệu gốc ban đầu từ Google Sheets."""
         self._mutations = {"deleted_ids": [], "updated_records": {}, "added_records": []}
         self._save_mutations()
         if self._base_data is not None:
@@ -369,7 +381,6 @@ class SheetsService:
         return True
 
     def extract_filter_options(self, records: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-        """Lấy danh sách các giá trị duy nhất cho từng dropdown bộ lọc."""
         keys = ["Vùng", "Đối tác", "Block", "Chức danh", "Tình trạng Hợp đồng", "Tình trạng Tài khoản", "Loại HĐLĐ"]
         options = {k: set() for k in keys}
         for r in records:
@@ -380,7 +391,6 @@ class SheetsService:
         return {k: sorted(list(v)) for k, v in options.items()}
 
     def calculate_stats(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Tính toán các chỉ số thống kê."""
         total = len(records)
         working_count = 0
         resigned_count = 0
@@ -410,5 +420,4 @@ class SheetsService:
             "region_count": len(regions)
         }
 
-# Khởi tạo singleton instance
 sheets_service = SheetsService()
