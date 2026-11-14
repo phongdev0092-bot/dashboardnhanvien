@@ -1,0 +1,508 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Vùng hiển thị thông báo lỗi / quyền truy cập Google Sheets -->
+<div id="alert-banner-container"></div>
+
+<!-- 4.1 THẺ THỐNG KÊ (STAT CARDS) -->
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4 mb-6">
+  <!-- Thẻ 1: Hero Card (Nổi bật nhất) -->
+  <div class="col-span-2 sm:col-span-2 md:col-span-2 lg:col-span-1 rounded-lg border-2 border-primary/20 bg-card p-4 shadow-sm relative overflow-hidden flex flex-col justify-between">
+    <div class="flex items-center justify-between text-muted-foreground mb-2">
+      <span class="text-xs font-semibold uppercase tracking-wider text-primary">TỔNG NHÂN VIÊN</span>
+      <div class="w-7 h-7 rounded-md bg-primary/10 text-primary flex items-center justify-center">
+        <i data-lucide="users" class="w-4 h-4"></i>
+      </div>
+    </div>
+    <div>
+      <div id="stat-total" class="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground">0</div>
+      <p id="stat-total-sub" class="text-[11px] text-muted-foreground mt-1 truncate">Toàn bộ nhân sự trong hệ thống</p>
+    </div>
+  </div>
+
+  <!-- Thẻ 2: Đang làm việc -->
+  <div class="rounded-lg border border-border bg-card p-4 shadow-sm flex flex-col justify-between">
+    <div class="flex items-center justify-between text-muted-foreground mb-2">
+      <span class="text-xs font-medium text-muted-foreground">Đang làm việc</span>
+      <div class="w-7 h-7 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+        <i data-lucide="user-check" class="w-4 h-4"></i>
+      </div>
+    </div>
+    <div>
+      <div id="stat-working" class="text-xl sm:text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">0</div>
+      <p class="text-[11px] text-muted-foreground mt-1">Chưa có ngày nghỉ việc</p>
+    </div>
+  </div>
+
+  <!-- Thẻ 3: Đã nghỉ việc -->
+  <div class="rounded-lg border border-border bg-card p-4 shadow-sm flex flex-col justify-between">
+    <div class="flex items-center justify-between text-muted-foreground mb-2">
+      <span class="text-xs font-medium text-muted-foreground">Đã nghỉ việc</span>
+      <div class="w-7 h-7 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+        <i data-lucide="user-minus" class="w-4 h-4"></i>
+      </div>
+    </div>
+    <div>
+      <div id="stat-resigned" class="text-xl sm:text-2xl font-bold tracking-tight text-rose-600 dark:text-rose-400">0</div>
+      <p class="text-[11px] text-muted-foreground mt-1">Có ngày làm việc cuối</p>
+    </div>
+  </div>
+
+  <!-- Thẻ 4: Tài khoản hoạt động -->
+  <div class="rounded-lg border border-border bg-card p-4 shadow-sm flex flex-col justify-between">
+    <div class="flex items-center justify-between text-muted-foreground mb-2">
+      <span class="text-xs font-medium text-muted-foreground">TK Hoạt động</span>
+      <div class="w-7 h-7 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+        <i data-lucide="shield-check" class="w-4 h-4"></i>
+      </div>
+    </div>
+    <div>
+      <div id="stat-active-acc" class="text-xl sm:text-2xl font-bold tracking-tight text-foreground">0</div>
+      <p class="text-[11px] text-muted-foreground mt-1">Tình trạng tài khoản</p>
+    </div>
+  </div>
+
+  <!-- Thẻ 5: Số vùng -->
+  <div class="rounded-lg border border-border bg-card p-4 shadow-sm flex flex-col justify-between">
+    <div class="flex items-center justify-between text-muted-foreground mb-2">
+      <span class="text-xs font-medium text-muted-foreground">Số vùng</span>
+      <div class="w-7 h-7 rounded-md bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+        <i data-lucide="map" class="w-4 h-4"></i>
+      </div>
+    </div>
+    <div>
+      <div id="stat-regions" class="text-xl sm:text-2xl font-bold tracking-tight text-foreground">0</div>
+      <p class="text-[11px] text-muted-foreground mt-1">Khu vực phân bổ</p>
+    </div>
+  </div>
+</div>
+
+<!-- 4.2 BỘ LỌC VÀ TÌM KIẾM -->
+<div class="rounded-lg border border-border bg-card p-4 shadow-sm mb-6 space-y-3">
+  <!-- Dòng 1: Tìm kiếm tổng hợp + nút Thêm nhân viên + nút thao tác nhanh -->
+  <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+    <!-- Search Bar -->
+    <div class="relative flex-1">
+      <i data-lucide="search" class="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+      <input id="search-input" type="text"
+             placeholder="Tìm họ tên, mã NV, email, SĐT, inside account (không dấu / có dấu)..."
+             class="w-full pl-9 pr-4 py-2 text-xs sm:text-sm rounded-md border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring transition" />
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2 self-end sm:self-auto">
+      <!-- NÚT THÊM NHÂN VIÊN (MỚI) -->
+      <button onclick="openCreateModal()" title="Thêm nhân viên mới vào danh sách"
+              class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition shadow-sm">
+        <i data-lucide="user-plus" class="w-3.5 h-3.5"></i>
+        <span>Thêm nhân viên</span>
+      </button>
+
+      <!-- Nút Xóa bộ lọc -->
+      <button onclick="clearAllFilters()" title="Xóa tất cả bộ lọc và tìm kiếm"
+              class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border border-border bg-background hover:bg-muted text-muted-foreground hover:text-foreground transition">
+        <i data-lucide="filter-x" class="w-3.5 h-3.5"></i>
+        <span>Xóa bộ lọc</span>
+      </button>
+
+      <!-- Dropdown Cột hiển thị (Toggle Checkboxes) -->
+      <div class="relative">
+        <button id="column-dropdown-btn" onclick="toggleColumnDropdown(event)"
+                class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border border-border bg-background hover:bg-muted text-foreground transition shadow-sm">
+          <i data-lucide="columns-3" class="w-3.5 h-3.5"></i>
+          <span>Cột hiển thị</span>
+          <i data-lucide="chevron-down" class="w-3 h-3 text-muted-foreground"></i>
+        </button>
+
+        <!-- Menu cột popup -->
+        <div id="column-dropdown-menu"
+             class="hidden absolute right-0 mt-1 w-64 max-h-80 overflow-y-auto rounded-md border border-border bg-popover p-2 shadow-lg z-50">
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-border text-[11px] text-muted-foreground">
+            <span class="font-semibold text-foreground">Chọn cột hiển thị</span>
+            <button onclick="resetDefaultColumns()" class="text-primary hover:underline">Mặc định</button>
+          </div>
+          <div id="column-checkbox-list" class="space-y-0.5"></div>
+        </div>
+      </div>
+
+      <!-- Chọn số dòng mỗi trang -->
+      <div class="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+        <select onchange="handlePageSizeChange(this.value)"
+                class="px-2 py-2 rounded-md border border-input bg-background text-foreground text-xs focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer">
+          <option value="10">10 dòng</option>
+          <option value="25" selected>25 dòng</option>
+          <option value="50">50 dòng</option>
+          <option value="100">100 dòng</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dòng 2: 7 Dropdowns lọc tự động từ dữ liệu -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2 pt-1 border-t border-border/50">
+    <div>
+      <select id="filter-vung" class="w-full px-2.5 py-1.5 text-xs rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring">
+        <option value="">Tất cả Vùng</option>
+      </select>
+    </div>
+    <div>
+      <select id="filter-doi-tac" class="w-full px-2.5 py-1.5 text-xs rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring">
+        <option value="">Tất cả Đối tác</option>
+      </select>
+    </div>
+    <div>
+      <select id="filter-block" class="w-full px-2.5 py-1.5 text-xs rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring">
+        <option value="">Tất cả Block</option>
+      </select>
+    </div>
+    <div>
+      <select id="filter-chuc-danh" class="w-full px-2.5 py-1.5 text-xs rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring">
+        <option value="">Tất cả Chức danh</option>
+      </select>
+    </div>
+    <div>
+      <select id="filter-tinh-trang-hop-dong" class="w-full px-2.5 py-1.5 text-xs rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring">
+        <option value="">Tất cả Tình trạng HĐ</option>
+      </select>
+    </div>
+    <div>
+      <select id="filter-tinh-trang-tai-khoan" class="w-full px-2.5 py-1.5 text-xs rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring">
+        <option value="">Tất cả Tình trạng TK</option>
+      </select>
+    </div>
+    <div>
+      <select id="filter-loai-hdld" class="w-full px-2.5 py-1.5 text-xs rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring">
+        <option value="">Tất cả Loại HĐLĐ</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<!-- 4.3 BẢNG THÔNG TIN NHÂN VIÊN (TABLE) -->
+<div class="rounded-lg border border-border bg-card shadow-sm overflow-hidden">
+  <!-- Loading Skeleton -->
+  <div id="loading-skeleton" class="hidden p-6 space-y-4">
+    <div class="h-6 bg-muted rounded w-1/4 animate-pulse"></div>
+    <div class="space-y-2">
+      <div class="h-10 bg-muted/60 rounded animate-pulse"></div>
+      <div class="h-10 bg-muted/40 rounded animate-pulse"></div>
+      <div class="h-10 bg-muted/60 rounded animate-pulse"></div>
+      <div class="h-10 bg-muted/40 rounded animate-pulse"></div>
+      <div class="h-10 bg-muted/60 rounded animate-pulse"></div>
+    </div>
+  </div>
+
+  <!-- Vùng chứa bảng có cuộn ngang và cột cố định -->
+  <div id="table-container" class="overflow-x-auto relative max-h-[680px]">
+    <table class="w-full text-left border-collapse text-sm">
+      <thead id="employee-table-head" class="sticky top-0 z-30 shadow-xs">
+        <!-- Thead được JS render tự động -->
+      </thead>
+      <tbody id="employee-table-body">
+        <!-- Tbody được JS render tự động -->
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Empty State -->
+  <div id="empty-state" class="hidden py-16 px-4 text-center">
+    <div class="w-12 h-12 rounded-full bg-muted flex items-center justify-center mx-auto text-muted-foreground mb-3">
+      <i data-lucide="search-x" class="w-6 h-6"></i>
+    </div>
+    <h3 class="text-sm font-semibold text-foreground">Không tìm thấy nhân viên phù hợp</h3>
+    <p class="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+      Không có bản ghi nào khớp với điều kiện tìm kiếm hoặc bộ lọc hiện tại. Thử đổi từ khóa hoặc xóa bộ lọc.
+    </p>
+    <button onclick="clearAllFilters()" class="mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition shadow-sm">
+      <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Xóa tất cả bộ lọc
+    </button>
+  </div>
+
+  <!-- Thanh phân trang (Pagination) -->
+  <div class="border-t border-border px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 bg-card">
+    <div id="pagination-info" class="text-xs text-muted-foreground">
+      Đang tải dữ liệu...
+    </div>
+    <div id="pagination-container" class="flex items-center gap-1">
+      <!-- Nút trang được JS render -->
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================== -->
+<!-- 1. MODAL / DIALOG CHI TIẾT NHÂN VIÊN (SHADCN UI DIALOG) -->
+<!-- ============================================================== -->
+<div id="employee-detail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div class="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity" onclick="closeDetailModal()"></div>
+  <div class="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-2xl z-10 animate-in fade-in zoom-in-95 duration-200">
+    <div id="modal-detail-body">
+      <!-- Nội dung chi tiết được JS render -->
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================== -->
+<!-- 2. MODAL FORM THÊM / SỬA NHÂN VIÊN (CREATE / EDIT DIALOG) -->
+<!-- ============================================================== -->
+<div id="employee-form-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div class="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity" onclick="closeFormModal()"></div>
+  <div class="relative w-full max-w-3xl max-h-[92vh] flex flex-col rounded-lg border border-border bg-card shadow-2xl z-10 animate-in fade-in zoom-in-95 duration-200">
+    
+    <!-- Modal Header -->
+    <div class="flex items-center justify-between border-b border-border p-5 shrink-0">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-md bg-primary/10 text-primary flex items-center justify-center">
+          <i id="form-header-icon" data-lucide="user-plus" class="w-4 h-4"></i>
+        </div>
+        <div>
+          <h2 id="form-modal-title" class="text-base font-bold text-foreground">Thêm nhân viên mới</h2>
+          <p id="form-modal-subtitle" class="text-xs text-muted-foreground">Điền đầy đủ thông tin nhân viên theo các danh mục bên dưới</p>
+        </div>
+      </div>
+      <button onclick="closeFormModal()" class="p-1 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+
+    <!-- Modal Form Body (Cuộn độc lập) -->
+    <form id="employee-form" onsubmit="handleSaveEmployee(event)" class="overflow-y-auto p-5 flex-1 space-y-6 text-xs">
+      <input type="hidden" id="form-emp-id" name="_id" value="" />
+
+      <!-- Nhóm 1: Thông tin cá nhân -->
+      <div class="space-y-3">
+        <div class="flex items-center gap-2 text-primary font-semibold border-b border-border pb-1.5 text-xs">
+          <i data-lucide="user" class="w-3.5 h-3.5"></i> 1. Thông tin cá nhân
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Họ Tên NV <span class="text-destructive">*</span></label>
+            <input type="text" id="form-HoTenNV" name="Họ Tên NV" required placeholder="Ví dụ: Nguyễn Văn An"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Mã NV</label>
+            <input type="text" id="form-MaNV" name="Mã NV" placeholder="Để trống sẽ tự sinh mã"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">CMND / CCCD</label>
+            <input type="text" id="form-CMND" name="CMND" placeholder="079095001234"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Số điện thoại</label>
+            <input type="text" id="form-SoDienThoai" name="Số điện thoại" placeholder="0901234567"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Email</label>
+            <input type="email" id="form-Email" name="Email" placeholder="an.nguyen@fpt.com"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Tọa độ (Lat, Long)</label>
+            <input type="text" id="form-ToaDo" name="Tọa độ" placeholder="10.776889, 106.700806"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1 sm:col-span-2">
+            <label class="font-medium text-foreground">Địa chỉ</label>
+            <input type="text" id="form-DiaChi" name="Địa chỉ" placeholder="123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1 sm:col-span-1">
+            <label class="font-medium text-foreground">URL Hình ảnh</label>
+            <input type="url" id="form-HinhAnh" name="Hình ảnh" placeholder="https://..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Nhóm 2: Công việc & Phân công -->
+      <div class="space-y-3">
+        <div class="flex items-center gap-2 text-primary font-semibold border-b border-border pb-1.5 text-xs">
+          <i data-lucide="briefcase" class="w-3.5 h-3.5"></i> 2. Công việc & Phân công
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Vùng</label>
+            <input type="text" id="form-Vung" name="Vùng" placeholder="Vùng 1, Vùng 2..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Đối tác</label>
+            <input type="text" id="form-DoiTac" name="Đối tác" placeholder="FPT Retail, Viễn Thông A..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Block</label>
+            <input type="text" id="form-Block" name="Block" placeholder="Block A, Block B..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Chức danh</label>
+            <input type="text" id="form-ChucDanh" name="Chức danh" placeholder="Chuyên viên Bán hàng, Cửa hàng trưởng..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Điều hành</label>
+            <input type="text" id="form-DieuHanh" name="Điều hành" placeholder="Kinh doanh, Kỹ thuật, Quản lý..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Loại HĐLĐ</label>
+            <input type="text" id="form-LoaiHDLD" name="Loại HĐLĐ" placeholder="HĐLĐ xác định thời hạn, Thử việc..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Phân công</label>
+            <input type="text" id="form-PhanCong" name="Phân công" placeholder="Cửa hàng 123..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Tính lương</label>
+            <input type="text" id="form-TinhLuong" name="Tính lương" placeholder="Có lương, Không lương..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Vị trí phụ trách</label>
+            <input type="text" id="form-ViTriPhuTrach" name="Vị trí phụ trách" placeholder="Quận 1, Cầu Giấy..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Ngày vào công ty</label>
+            <input type="text" id="form-NgayVoCongTy" name="Ngày Vô Công Ty" placeholder="DD/MM/YYYY"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Ngày làm việc cuối</label>
+            <input type="text" id="form-NgayLamViecCuoi" name="Ngày làm Việc Cuối" placeholder="Để trống nếu đang làm việc"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Nhóm 3: Tài khoản & Phân quyền -->
+      <div class="space-y-3">
+        <div class="flex items-center gap-2 text-primary font-semibold border-b border-border pb-1.5 text-xs">
+          <i data-lucide="shield-check" class="w-3.5 h-3.5"></i> 3. Tài khoản & Phân quyền
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Inside Account</label>
+            <input type="text" id="form-InsideAccount" name="Inside Account" placeholder="annv, maitt..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Password</label>
+            <input type="text" id="form-Password" name="Password" placeholder="••••••••"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Tình trạng Tài khoản</label>
+            <select id="form-TinhTrangTaiKhoan" name="Tình trạng Tài khoản"
+                    class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring">
+              <option value="Hoạt động">Hoạt động</option>
+              <option value="Đã khóa">Đã khóa</option>
+              <option value="Khóa tạm thời">Khóa tạm thời</option>
+            </select>
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Tình trạng Hợp đồng</label>
+            <select id="form-TinhTrangHopDong" name="Tình trạng Hợp đồng"
+                    class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring">
+              <option value="Còn hiệu lực">Còn hiệu lực</option>
+              <option value="Hết hạn">Hết hạn</option>
+              <option value="Đang chờ gia hạn">Đang chờ gia hạn</option>
+              <option value="Đã chấm dứt">Đã chấm dứt</option>
+            </select>
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Mobisale</label>
+            <select id="form-Mobisale" name="Mobisale"
+                    class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring">
+              <option value="Có">Có</option>
+              <option value="Không">Không</option>
+            </select>
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Roles / Vai trò</label>
+            <input type="text" id="form-Roles" name="Roles" placeholder="Nhân viên, Đội trưởng, Quản lý..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Nhóm 4: Đội trưởng & Hỗ trợ -->
+      <div class="space-y-3">
+        <div class="flex items-center gap-2 text-primary font-semibold border-b border-border pb-1.5 text-xs">
+          <i data-lucide="users" class="w-3.5 h-3.5"></i> 4. Đội trưởng & Hỗ trợ
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Hỗ trợ</label>
+            <input type="text" id="form-HoTro" name="Hỗ trợ" placeholder="Hỗ trợ kỹ thuật, Hậu cần..."
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Mã NV Đội trưởng</label>
+            <input type="text" id="form-MaNVDoiTruong" name="Mã NV Đội trưởng" placeholder="NV00050"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Họ tên Đội trưởng</label>
+            <input type="text" id="form-HoTenDoiTruong" name="Họ tên Đội trưởng" placeholder="Trần Hữu Thắng"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground focus:ring-1 focus:ring-ring" />
+          </div>
+          <div class="space-y-1">
+            <label class="font-medium text-foreground">Số điện thoại FRT</label>
+            <input type="text" id="form-SoDienThoaiFRT" name="Số điện thoại FRT" placeholder="0988111222"
+                   class="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-foreground font-mono focus:ring-1 focus:ring-ring" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="flex items-center justify-end gap-2 pt-4 border-t border-border">
+        <button type="button" onclick="closeFormModal()" class="px-4 py-2 text-xs font-medium rounded-md border border-border bg-background hover:bg-muted text-foreground transition">
+          Hủy bỏ
+        </button>
+        <button type="submit" id="form-submit-btn" class="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition shadow-sm">
+          <i id="form-submit-spinner" data-lucide="save" class="w-3.5 h-3.5"></i>
+          <span id="form-submit-text">Lưu nhân viên</span>
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============================================================== -->
+<!-- 3. MODAL XÁC NHẬN XÓA (SHADCN UI ALERT DIALOG) -->
+<!-- ============================================================== -->
+<div id="delete-confirm-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div class="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity" onclick="closeDeleteModal()"></div>
+  <div class="relative w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-2xl z-10 animate-in fade-in zoom-in-95 duration-200 space-y-4">
+    <div class="flex items-start gap-3">
+      <div class="w-10 h-10 rounded-full bg-destructive/10 text-destructive flex items-center justify-center shrink-0">
+        <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h3 class="text-sm font-bold text-foreground">Xác nhận xóa nhân viên</h3>
+        <p class="text-xs text-muted-foreground mt-1">
+          Bạn có chắc chắn muốn xóa nhân viên <span id="delete-emp-name" class="font-semibold text-foreground"></span> 
+          (Mã: <span id="delete-emp-code" class="font-mono text-foreground"></span>) không?
+        </p>
+        <p class="text-[11px] text-destructive mt-1 font-medium">Thao tác này sẽ loại bỏ nhân viên khỏi danh sách hiển thị.</p>
+      </div>
+    </div>
+    
+    <div class="flex justify-end gap-2 pt-2 border-t border-border">
+      <button onclick="closeDeleteModal()" class="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-background hover:bg-muted text-foreground transition">
+        Hủy bỏ
+      </button>
+      <button id="confirm-delete-btn" onclick="executeDeleteEmployee()" class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition shadow-sm">
+        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+        <span>Xác nhận xóa</span>
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -6,7 +6,9 @@ Hoàn toàn tương thích Vercel Serverless Function & Local Development
 """
 
 import os
+import sys
 import hashlib
+import traceback
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, Request, Form, status, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -25,15 +27,28 @@ DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
 SESSION_SECRET = os.getenv("SESSION_SECRET", "secret-token-key-2026-dashboard")
 COOKIE_NAME = "dashboard_auth"
 
-# Thiết lập đường dẫn tuyệt đối cho static và templates
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+# Tìm thư mục static và templates linh hoạt cho môi trường Serverless
+def get_resource_dir(name: str) -> str:
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), name),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "api", name),
+        os.path.join(os.getcwd(), name),
+        os.path.join(os.getcwd(), "api", name),
+        f"/var/task/{name}",
+        f"/var/task/api/{name}"
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+
+STATIC_DIR = get_resource_dir("static")
+TEMPLATES_DIR = get_resource_dir("templates")
 
 app = FastAPI(
     title="Employee Dashboard - Google Sheets Live",
     description="Dashboard quản lý nhân sự trực tiếp từ Google Sheets với phong cách shadcn/ui",
-    version="1.2.0"
+    version="1.3.0"
 )
 
 # Gắn thư mục tĩnh (CSS, JS) an toàn
@@ -42,6 +57,29 @@ if os.path.exists(STATIC_DIR):
 
 # Khởi tạo Jinja2 Templates an toàn
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+# Bắt lỗi toàn cục để hiển thị rõ ràng trên Vercel nếu có sự cố
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    return HTMLResponse(
+        status_code=500,
+        content=f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>500 Internal Server Error</title></head>
+        <body style="font-family: monospace; padding: 24px; background: #fff1f2; color: #881337; line-height: 1.5;">
+            <div style="max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; border: 1px solid #fecdd3; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+                <h2 style="color: #e11d48; margin-top: 0;">500 Internal Server Error (Debug Mode)</h2>
+                <p><b>Exception:</b> {type(exc).__name__}: {str(exc)}</p>
+                <h3>Traceback:</h3>
+                <pre style="background: #f8fafc; padding: 16px; border-radius: 6px; overflow-x: auto; border: 1px solid #e2e8f0; font-size: 13px;">{tb}</pre>
+                <p style="font-size: 12px; color: #64748b;">TEMPLATES_DIR: {TEMPLATES_DIR} (exists: {os.path.isdir(TEMPLATES_DIR)})<br/>STATIC_DIR: {STATIC_DIR} (exists: {os.path.isdir(STATIC_DIR)})</p>
+            </div>
+        </body>
+        </html>
+        """
+    )
 
 def is_auth_enabled() -> bool:
     """Kiểm tra có cấu hình mật khẩu truy cập dashboard không."""
@@ -59,13 +97,25 @@ def check_authenticated(request: Request) -> bool:
     cookie_token = request.cookies.get(COOKIE_NAME)
     return cookie_token == get_auth_token()
 
+def render_template(request: Request, name: str, context: Dict[str, Any]):
+    """Helper render template tương thích mọi phiên bản Starlette."""
+    # Đảm bảo request luôn có trong context dictionary
+    ctx = dict(context)
+    ctx["request"] = request
+    try:
+        # Starlette >= 0.38
+        return templates.TemplateResponse(request, name, ctx)
+    except Exception:
+        # Starlette < 0.38
+        return templates.TemplateResponse(name, ctx)
+
 # Route Trang chủ Dashboard
 @app.get("/", response_class=HTMLResponse)
 def get_dashboard(request: Request):
     if not check_authenticated(request):
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
-    return templates.TemplateResponse(
+    return render_template(
         request,
         "dashboard.html",
         {
@@ -80,7 +130,7 @@ def get_dashboard(request: Request):
 def get_login_page(request: Request):
     if not is_auth_enabled() or check_authenticated(request):
         return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
-    return templates.TemplateResponse(request, "login.html", {"error": None})
+    return render_template(request, "login.html", {"error": None})
 
 @app.post("/login", response_class=HTMLResponse)
 def handle_login(request: Request, password: str = Form(...)):
@@ -89,7 +139,6 @@ def handle_login(request: Request, password: str = Form(...)):
 
     if password == DASHBOARD_PASSWORD:
         response = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
-        # Lưu cookie phiên đăng nhập 7 ngày
         response.set_cookie(
             key=COOKIE_NAME,
             value=get_auth_token(),
@@ -99,7 +148,7 @@ def handle_login(request: Request, password: str = Form(...)):
         )
         return response
 
-    return templates.TemplateResponse(
+    return render_template(
         request,
         "login.html",
         {"error": "Mật khẩu không chính xác, vui lòng thử lại."}
@@ -183,7 +232,9 @@ def api_health():
         "sheet_id": sheets_service.sheet_id,
         "sheet_gid": sheets_service.sheet_gid,
         "auth_enabled": is_auth_enabled(),
-        "cache_ttl": sheets_service.cache_ttl
+        "cache_ttl": sheets_service.cache_ttl,
+        "templates_dir": TEMPLATES_DIR,
+        "static_dir": STATIC_DIR
     }
 
 # Khởi động app khi chạy trực tiếp qua python main.py
