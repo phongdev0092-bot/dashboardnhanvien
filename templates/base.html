@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="vi" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Dashboard Nhân viên - Google Sheets Live{% endblock %}</title>
+  
+  <!-- Inter Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            border: "hsl(var(--border))",
+            input: "hsl(var(--input))",
+            ring: "hsl(var(--ring))",
+            background: "hsl(var(--background))",
+            foreground: "hsl(var(--foreground))",
+            primary: {
+              DEFAULT: "hsl(var(--primary))",
+              foreground: "hsl(var(--primary-foreground))",
+            },
+            secondary: {
+              DEFAULT: "hsl(var(--secondary))",
+              foreground: "hsl(var(--secondary-foreground))",
+            },
+            destructive: {
+              DEFAULT: "hsl(var(--destructive))",
+              foreground: "hsl(var(--destructive-foreground))",
+            },
+            muted: {
+              DEFAULT: "hsl(var(--muted))",
+              foreground: "hsl(var(--muted-foreground))",
+            },
+            accent: {
+              DEFAULT: "hsl(var(--accent))",
+              foreground: "hsl(var(--accent-foreground))",
+            },
+            card: {
+              DEFAULT: "hsl(var(--card))",
+              foreground: "hsl(var(--card-foreground))",
+            },
+          },
+          borderRadius: {
+            lg: "var(--radius)",
+            md: "calc(var(--radius) - 2px)",
+            sm: "calc(var(--radius) - 4px)",
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="/static/css/style.css">
+  
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-background text-foreground antialiased font-sans min-h-screen flex flex-col selection:bg-primary selection:text-primary-foreground">
+
+  <!-- Header thanh điều hướng shadcn style -->
+  <header class="sticky top-0 z-40 w-full border-b border-border bg-card/85 backdrop-blur-md">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <!-- Logo & Title -->
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold shadow-sm">
+          <i data-lucide="users" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base sm:text-lg font-bold tracking-tight text-foreground">Dashboard Nhân viên</h1>
+            <span id="data-source-badge" class="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              Google Sheets Live
+            </span>
+          </div>
+          <p id="last-updated-text" class="text-[11px] text-muted-foreground"></p>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center gap-2 sm:gap-3">
+        <!-- Nút Làm mới dữ liệu -->
+        <button onclick="loadData(true)" title="Tải lại dữ liệu ngay từ Google Sheets"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-background hover:bg-muted text-foreground transition shadow-sm">
+          <i id="refresh-btn-icon" data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          <span class="hidden sm:inline">Làm mới dữ liệu</span>
+        </button>
+
+        <!-- Nút Xuất CSV -->
+        <button onclick="exportFilteredCsv()" title="Xuất dữ liệu đang lọc ra file CSV"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-background hover:bg-muted text-foreground transition shadow-sm">
+          <i data-lucide="download" class="w-3.5 h-3.5"></i>
+          <span class="hidden sm:inline">Xuất CSV</span>
+        </button>
+
+        <!-- Nút Toggle Sáng/Tối -->
+        <button id="theme-toggle-btn" title="Chuyển chế độ Sáng / Tối"
+                class="p-2 rounded-md border border-border bg-background hover:bg-muted text-foreground transition shadow-sm">
+          <i id="theme-icon-sun" data-lucide="sun" class="w-4 h-4 hidden text-amber-500"></i>
+          <i id="theme-icon-moon" data-lucide="moon" class="w-4 h-4 text-slate-700 dark:text-slate-200"></i>
+        </button>
+
+        {% if auth_enabled %}
+        <!-- Nút Đăng xuất -->
+        <a href="/logout" title="Đăng xuất khỏi dashboard"
+           class="p-2 rounded-md border border-border hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 text-muted-foreground transition shadow-sm">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-border py-4 text-center text-xs text-muted-foreground">
+    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+      <p>Hệ thống Quản lý Nhân sự • Đồng bộ trực tiếp Google Sheets</p>
+      <p class="font-mono text-[11px]">Google Sheet ID: 17QLc9Sl...F6pY (gid: 32204814)</p>
+    </div>
+  </footer>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm pointer-events-none"></div>
+
+  <!-- Scripts -->
+  <script src="/static/js/app.js"></script>
+  <script>
+    // Khởi tạo lucide icons ban đầu
+    document.addEventListener("DOMContentLoaded", () => {
+      lucide.createIcons();
+    });
+  </script>
+</body>
+</html>
